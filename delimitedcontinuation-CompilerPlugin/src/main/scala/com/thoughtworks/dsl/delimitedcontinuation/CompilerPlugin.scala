@@ -2,261 +2,228 @@ package com.thoughtworks.dsl.delimitedcontinuation
 
 import com.thoughtworks.dsl.delimitedcontinuation.annotations.{reset, shift}
 
+import scala.tools.nsc.ast.TreeDSL
 import scala.tools.nsc.plugins.{Plugin, PluginComponent}
+import scala.tools.nsc.transform.{Transform, TypingTransformers}
 import scala.tools.nsc.typechecker.ContextMode
-import scala.tools.nsc.{Global, Mode}
-private object CompilerPlugin {
-  private[CompilerPlugin] object Reset
-}
+import scala.tools.nsc.{Global, Mode, Phase}
 
 /**
   * @author 杨博 (Yang Bo)
   */
-final class CompilerPlugin(override val global: Global) extends Plugin {
-  import CompilerPlugin._
+final class CompilerPlugin(override val global: Global) extends Plugin with TypingTransformers {
+  val name: String = "delimitedcontinuation"
+  val description: String =
+    "A compiler plugin that converts native imperative syntax to monadic expressions or continuation-passing style expressions"
   import global._
   import global.analyzer._
 
-  private type CpsAttachment = (Tree => Tree) => Tree
+  sealed trait CpsTree {
+    def cpsApply(continue: (Tree, Typer, Type) => Tree): Tree
+  }
 
-  val name: String = "delimitedcontinuation"
+  trait PlainTree extends CpsTree {
+    def plainTree: Tree
+    def typer: Typer
+    def domainType: Type
+    // TODO: Add typer parameter here?
+    final def cpsApply(continue: (Tree, Typer, Type) => Tree): Tree = continue(plainTree, typer, domainType)
+  }
 
-  val components: List[PluginComponent] = Nil
+//  def cpsTree(domain: TypTree, tree: Tree): CpsTree = new CpsTree {
+//    def toTree: Tree = tree
+//  }
 
-  val description: String =
-    "A compiler plugin that converts native imperative syntax to monadic expressions or continuation-passing style expressions"
+//  private final class CpsTransformer(unit: CompilationUnit) extends TypingTransformer(unit) {
+//
+////    override def transform(tree: Tree): Tree = {
+////      tree match {
+////        case DefDef(mods, name, tparams, vparamss, tpt, rhs) =>
+////          val transformedRhs = cpsTree(tpt.asInstanceOf[TypTree], rhs).toTree
+////          atOwner()
+////          treeCopy.DefDef(tree, mods, name, tparams, vparamss, tpt, transformedRhs)
+////        case _ =>
+////          super.transform(tree)
+////      }
+////    }
+//    override def transformValDefss(treess: List[List[global.ValDef]]): List[List[global.ValDef]] =
+//      super.transformValDefss(treess)
+//  }
 
-  private val analyzerPlugin: AnalyzerPlugin = new AnalyzerPlugin {
-    private val resetSymbol = symbolOf[reset]
-    private val shiftSymbol = symbolOf[shift]
+  val components: List[PluginComponent] = new PluginComponent {
 
-    override def canAdaptAnnotations(tree: Tree, typer: Typer, mode: Mode, pt: Type): Boolean = {
-      mode.inExprMode && tree.tpe.hasAnnotation(resetSymbol)
-    }
-
-    override def adaptAnnotations(tree: Tree, typer: Typer, mode: Mode, pt: Type): Tree = {
-      val Some(attachment) = tree.attachments.get[CpsAttachment]
-      val Seq(typedCpsTree) = tree.tpe.annotations.collect {
-        case annotation if annotation.matches(resetSymbol) =>
-          val cpsTree = resetAttrs(attachment(identity))
-//          reporter.info(tree.pos, s"Translating to continuation-passing style: $cpsTree", true)
-          deact {
-            typer.context.withMode(ContextMode.ReTyping) {
-              typer.typed(cpsTree, Mode.EXPRmode)
-            }
-          }
-      }
-      typedCpsTree
-    }
-
-    override def pluginsPt(pt: Type, typer: Typer, tree: Tree, mode: Mode): Type = {
-      if (mode.inExprMode) {
-        tree match {
-          case function: Function =>
-            function.body.updateAttachment(Reset)
-          case defDef: DefDef =>
-            defDef.rhs.updateAttachment(Reset)
-          case implDef: ImplDef =>
-            implDef.impl.body.foreach(_.updateAttachment(Reset))
-          case _ =>
+    val global: CompilerPlugin.this.global.type = CompilerPlugin.this.global
+    val phaseName: String = CompilerPlugin.this.name
+    val runsAfter: List[String] = List("patmat") // Maybe typer is better?
+    def newPhase(prev: Phase): Phase = new StdPhase(prev) {
+      def apply(unit: CompilationUnit): Unit = {
+        val rootTyper = analyzer.newTyper(analyzer.rootContextPostTyper(unit, EmptyTree))
+        unit.body = cpsTransform(unit.body, rootTyper, definitions.UnitTpe).cpsApply {
+          (rootTree, rootTyper, rootType) =>
+            rootTree
         }
       }
-      pt
     }
+  } :: Nil
 
-    private def cpsAttachment(tree: Tree)(continue: Tree => Tree): Tree = {
-      tree.attachments.get[CpsAttachment] match {
-        case Some(attachment) => attachment(continue)
-        case None             => continue(tree)
-      }
-    }
-    private def cpsParameter(parameters: List[Tree])(continue: List[Tree] => Tree): Tree = {
-      parameters match {
-        case Nil =>
-          continue(Nil)
-        case head :: tail =>
-          cpsAttachment(head) { headValue =>
-            cpsParameter(tail) { tailValues =>
-              continue(headValue :: tailValues)
-            }
-          }
-      }
-    }
-    private def cpsParameterList(parameterLists: List[List[Tree]])(continue: List[List[Tree]] => Tree): Tree = {
-      parameterLists match {
-        case Nil =>
-          continue(Nil)
-        case headList :: tailList =>
-          cpsParameter(headList) { headValue =>
-            cpsParameterList(tailList) { tailValues =>
-              continue(headValue :: tailValues)
-            }
-          }
-      }
-    }
+  private def cpsTransform(outerTree: Tree, outerTyper: Typer, expectedDomainType: Type): CpsTree = {
+    // atOwner(tree.symbol):
+    //   Function, ValDef, DefDef, ClassDef, TypeDef
+    //   maybe LabelDef
+    // atOwner(mclass(tree.symbol)):
+    //   ModuleDef, PackageDef
 
-    private def isCpsTree(tree: Tree) = {
-      def hasCpsAttachment(child: Any): Boolean = {
-        child match {
-          case list: List[_]   => list.exists(hasCpsAttachment)
-          case childTree: Tree => childTree.hasAttachment[CpsAttachment]
-          case _               => false
+    outerTree match {
+      case PackageDef(pid, stats) =>
+        new PlainTree {
+          def typer = outerTyper
+          def domainType = expectedDomainType
+          def plainTree = {
+            val subTyper = outerTyper.atOwner(outerTree, outerTree.symbol.moduleClass)
+            treeCopy.PackageDef(outerTree, pid, stats.map { stat =>
+              cpsTransform(stat, subTyper, definitions.UnitTpe).cpsApply { (statTree, _, _) =>
+                statTree
+              }
+            })
+          }
         }
-      }
-      tree.productIterator.exists(hasCpsAttachment)
-    }
 
-    override def pluginsTyped(tpe: Type, typer: Typer, tree: Tree, mode: Mode, pt: Type): Type = {
-      def cps(continue: Tree => Tree): Tree = atPos(tree.pos) {
-        tree match {
-          case q"$prefix.$method[..$typeParameters](...$parameterLists)" =>
-            cpsAttachment(prefix) { prefixValue =>
-              cpsParameterList(parameterLists) { parameterListsValues =>
-                atPos(tree.pos) {
-                  q"$prefixValue.$method[..$typeParameters](...$parameterListsValues)"
+      case ModuleDef(mods, name, impl @ Template(parents, self, body)) =>
+        new PlainTree {
+          def typer = outerTyper
+          def domainType = expectedDomainType
+          def plainTree: Tree = {
+            val subTyper = outerTyper.atOwner(outerTree, outerTree.symbol.moduleClass)
+            treeCopy.ModuleDef(
+              outerTree,
+              mods,
+              name,
+              treeCopy.Template(impl, parents, self, body.map { stat =>
+                cpsTransform(stat, subTyper, definitions.UnitTpe).cpsApply { (statTree, _, _) =>
+                  statTree
                 }
-              }
-            }
-          // TODO: lazy val
-          case ValDef(mods, name, tpt, rhs) =>
-            cpsAttachment(rhs) { rhsValue =>
-              atPos(tree.pos) {
-                q"""
-                ${treeCopy.ValDef(tree, mods, name, tpt, rhsValue)}
-                ${continue(q"()")}
-                """
-              }
-            }
-          case Typed(expr, tpt) =>
-            cpsAttachment(expr) { exprValue =>
-              atPos(tree.pos) {
-                continue(treeCopy.Typed(tree, exprValue, tpt))
-              }
-            }
-          case Block(stats, expr) =>
-            def loop(stats: List[Tree]): Tree = {
-              stats match {
-                case Nil =>
-                  cpsAttachment(expr)(continue)
-                case head :: tail =>
-                  def notPure(head: Tree): List[Tree] = {
-                    if (head.isInstanceOf[Ident]) {
-                      Nil
-                    } else {
-                      head :: Nil
-                    }
-                  }
-                  cpsAttachment(head) { headValue =>
-                    q"..${notPure(headValue)}; ${loop(tail)}"
-                  }
-              }
-            }
-            loop(stats)
-          case If(cond, thenp, elsep) =>
-            val endIfName = currentUnit.freshTermName("endIf")
-            val ifResultName = currentUnit.freshTermName("ifResult")
-            val endIfBody = continue(q"$ifResultName")
-            q"""
-            @${definitions.ScalaInlineClass} def $endIfName($ifResultName: $tpe) = $endIfBody
-            ${cpsAttachment(cond) { condValue =>
-              atPos(tree.pos) {
-                q"""
-                if ($condValue) ${cpsAttachment(thenp) { result =>
-                  q"$endIfName($result)"
-                }} else ${cpsAttachment(elsep) { result =>
-                  q"$endIfName($result)"
-                }}
-                """
-              }
-            }}
-            """
-          case _: CaseDef =>
-            // This CaseDef tree contains some bang notations, and will be translated by enclosing Try tree, not here
-            EmptyTree
-          case Try(block, catches, finalizer) =>
-            val finalizerName = currentUnit.freshTermName("finalizer")
-            val tryResultName = currentUnit.freshTermName("tryResult")
-            q"""
-            @${definitions.ScalaInlineClass} def $finalizerName($tryResultName: $tpe) = ${cpsAttachment(finalizer) {
-              finalizerValue =>
-                q"""
-                $finalizerValue
-                ${continue(q"$tryResultName")}
-              """
-            }}
-            ${cpsAttachment(block) { blockValue =>
-              q"$finalizerName($blockValue)"
-            }}.cpsCatch {
-              case ..${catches.map {
-              case caseDef @ CaseDef(pat, guard, body) =>
-                atPos(caseDef.pos) {
-                  CaseDef(pat, guard, cpsAttachment(body) { bodyValue =>
-                    q"$finalizerName($bodyValue)"
-                  })
-                }
-            }}
-            }
-            """
-        }
-      }
-      def checkResetAttachment: Type = {
-        tree.attachments.get[Reset.type] match {
-          case None =>
-            tpe
-          case Some(_) =>
-            tpe.withAnnotations(List(Annotation(deact {
-              typer.context.withMode(ContextMode.NOmode) {
-                typer.typed(q"new $resetSymbol()", Mode.EXPRmode)
-              }
-            })))
-        }
-      }
-      if (mode.inExprMode) {
-        val symbol = tree.symbol
-        if (symbol != null && symbol.hasAnnotation(shiftSymbol) && !tree.isDef) {
-          val q"$shiftOps.$shiftMethod" = tree
-          val attachment: CpsAttachment = { continue: (Tree => Tree) =>
-            val aName = currentUnit.freshTermName("a")
-            atPos(tree.pos) {
-              q"""
-                $shiftOps.cpsApply { $aName: $tpe =>
-                  ${continue(q"$aName")}
-                }
-              """
-            }
+              })
+            )
           }
-          tree.updateAttachment[CpsAttachment](attachment)
-          checkResetAttachment
-        } else if (isCpsTree(tree)) {
-          tree.updateAttachment[CpsAttachment](cps)
-          checkResetAttachment
+        }
+      case DefDef(mods, name, tparams, vparamss, tpt, rhs) =>
+        new PlainTree {
+          def typer = outerTyper
+          def domainType = expectedDomainType
+          def plainTree: Tree = {
+            val defTyper = outerTyper.atOwner(outerTree, outerTree.symbol)
+            treeCopy.DefDef(outerTree,
+                            mods,
+                            name,
+                            tparams,
+                            vparamss,
+                            tpt,
+                            cpsTransform(rhs, defTyper, tpt.tpe).cpsApply { (rhsTree, _, _) =>
+                              rhsTree
+
+                            })
+          }
+        }
+      case Block(stats, expr) =>
+        val cpsStats = stats.map { stat =>
+          cpsTransform(stat, typer, expectedDomainType) // FIXME: typer should be generated from foldLeft
+        }
+        val cpsExpr = cpsTransform(expr, typer, expectedDomainType)
+
+        if (cpsExpr.isInstanceOf[PlainTree] && cpsStats.forall {
+              _.isInstanceOf[PlainTree]
+            }) {
+          new PlainTree {
+            def plainTree: Tree =
+              treeCopy.Block(outerTree,
+                             cpsStats.map { case statPlainTree: PlainTree => statPlainTree.plainTree },
+                             cpsExpr.asInstanceOf[PlainTree].plainTree)
+
+            def typer: Typer = outerTyper
+
+            def domainType = expectedDomainType
+          }
         } else {
-          tpe
+          new CpsTree {
+            def cpsApply(continue: (Tree, Typer, Type) => Tree): Tree = {
+              def loop(cpsStats: List[CpsTree]): Tree = {
+                cpsStats match {
+                  case Nil =>
+                    cpsExpr.cpsApply(continue)
+                  case head :: tail =>
+                    def notPure(head: Tree): List[Tree] = {
+                      if (head.isInstanceOf[Ident]) {
+                        Nil
+                      } else {
+                        head :: Nil
+                      }
+                    }
+
+                    // TODO: domain type changing
+                    head.cpsApply { (headValue, headTyper, expectedDomainType) =>
+                      headTyper.typed(q"..${notPure(headValue)}; ${loop(tail)}", expectedDomainType)
+                    }
+                }
+              }
+              loop(cpsStats)
+            }
+          }
         }
 
-      } else {
-        tpe
-      }
-    }
-
-    private var active = true
-    private def deact[A](run: => A): A = {
-      synchronized {
-        active = false
-        try {
-          run
-        } finally {
-          active = true
-        }
-      }
-    }
-
-    override def isActive(): Boolean = {
-      active && phase.id < currentRun.picklerPhase.id
+      case q"$prefix.$methodName[..$typeParameters](...$parameterLists)" =>
+        ???
+//          new CpsTree {
+//            def cpsApply(continue: (Tree, Typer) => Tree): Tree = {
+//              def loop(cpsStats: List[CpsTree]): Tree = {
+//                cpsStats match {
+//                  case Nil =>
+//                    cpsTransform(expr, typer).cpsApply { (rhsTree, statTyper) =>
+//                      rhsTree
+//
+//                    }
+//                  case head :: tail =>
+//                    def notPure(head: Tree): List[Tree] = {
+//                      if (head.isInstanceOf[Ident]) {
+//                        Nil
+//                      } else {
+//                        head :: Nil
+//                      }
+//                    }
+//
+//                    // TODO: typer
+//                    head.cpsApply { (headValue, headTyper) =>
+//                      headTyper.typed(q"..${notPure(headValue)}; ${loop(tail)}")
+//                    }
+//                }
+//              }
+//              loop(cpsStats)
+//            }
+//          }
+//        }
+//      case _ =>
+//        reporter.error(tree.pos, s"Unsupported tree: ${showRaw(tree)}")
+//        new PlainTree {
+//          def toTree: Tree = tree
+//        }
     }
 
   }
 
-  global.analyzer.addAnalyzerPlugin(analyzerPlugin)
+}
 
+object CompilerPlugin {
+  trait CpsTransformer {
+    val global: Global
+    import global._
+  }
+
+//  final class CompilerPluginComponent(val global: Global) extends PluginComponent with Transform with TreeDSL {
+//    val phaseName: String = "delimitedcontinuation"
+//    val runsAfter: List[String] = "typer" :: Nil
+//
+//    protected def newTransformer(unit: CompilationUnit): Transformer = new TypingTransformer(unit) {
+//      override def transform(tree: Tree): Tree = super.transform(tree)
+//    }
+//  }
+//
 }
