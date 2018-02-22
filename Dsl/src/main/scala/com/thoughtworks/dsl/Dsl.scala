@@ -31,7 +31,7 @@ object Dsl {
     */
   trait Instruction[Self, Value] extends Any { this: Self =>
 
-    @shift
+    @shift("cpsApply")
     @compileTimeOnly(
       """This method requires the following compiler plugin: `addCompilerPlugin("com.thoughtworks.dsl" %% "compilerplugin" % "latest.release")`""")
     final def unary_! : Value = sys.error("Calls to this method should have been translated to `cpsApply`.")

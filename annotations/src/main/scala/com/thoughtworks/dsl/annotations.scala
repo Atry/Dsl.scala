@@ -95,6 +95,6 @@ object annotations {
   final class reset extends StaticAnnotation
 
   /** An annotation to mark a method is a shift control operator. */
-  final class shift extends StaticAnnotation
+  final class shift(cpsApplyMethodName: String) extends StaticAnnotation
 
 }

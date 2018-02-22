@@ -353,30 +353,33 @@ final class CompilerPlugin(override val global: Global) extends Plugin {
         }
       }
       if (mode.inExprMode) {
-        val symbol = tree.symbol
-        if (symbol != null && symbol.hasAnnotation(shiftSymbol) && !tree.isDef) {
-          val q"$shiftOps.$shiftMethod" = tree
-          val attachment: CpsAttachment = { continue: (Tree => Tree) =>
-            val aName = currentUnit.freshTermName("a")
+        Option(tree.symbol).flatMap(_.getAnnotation(shiftSymbol)) match {
+          case Some(shiftAnnotation) if !tree.isDef =>
+            val cpsApplyMethodName = TermName(shiftAnnotation.stringArg(0).get)
 
-            // FIXME: tpe is a by-name type. I don't know why.
-            atPos(tree.pos) {
-              q"""
-                $shiftOps.cpsApply { $aName: $tpe =>
+            val q"$shiftOps.$shiftMethod" = tree
+            val attachment: CpsAttachment = { continue: (Tree => Tree) =>
+              val aName = currentUnit.freshTermName("a")
+
+              // FIXME: tpe is a by-name type. I don't know why.
+              atPos(tree.pos) {
+                q"""
+                $shiftOps.$cpsApplyMethodName { $aName: $tpe =>
                   ${continue(q"$aName")}
                 }
               """
+              }
             }
-          }
-          tree.updateAttachment[CpsAttachment](attachment)
-          checkResetAttachment
-        } else if (isCpsTree(tree)) {
-          tree.updateAttachment[CpsAttachment](cps)
-          checkResetAttachment
-        } else {
-          tpe
+            tree.updateAttachment[CpsAttachment](attachment)
+            checkResetAttachment
+          case _ =>
+            if (isCpsTree(tree)) {
+              tree.updateAttachment[CpsAttachment](cps)
+              checkResetAttachment
+            } else {
+              tpe
+            }
         }
-
       } else {
         tpe
       }
