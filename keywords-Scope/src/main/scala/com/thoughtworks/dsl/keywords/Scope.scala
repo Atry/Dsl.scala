@@ -3,6 +3,8 @@ package com.thoughtworks.dsl.keywords
 import com.thoughtworks.dsl.Dsl
 import com.thoughtworks.dsl.Dsl.{!!, Keyword}
 
+import scala.annotation.tailrec
+import scala.collection.mutable.ArrayBuffer
 import scala.language.implicitConversions
 import scala.util.control.NonFatal
 
@@ -67,6 +69,50 @@ object Scope extends LowPriorityScope0 {
           rest(scopeValue)(outerFailureHandler)
         })(outerFailureHandler)
 
+      }
+    }
+
+  private val ExitScopeMarker = new AutoCloseable {
+    def close(): Unit = ()
+  }
+
+  implicit def autoCloseableScopeDsl[Value]: Dsl[Scope[Stream[AutoCloseable], Value], Stream[AutoCloseable], Value] =
+    new Dsl[Scope[Stream[AutoCloseable], Value], Stream[AutoCloseable], Value] {
+      def interpret(keyword: Scope[Stream[AutoCloseable], Value],
+                    handler: Value => Stream[AutoCloseable]): Stream[AutoCloseable] = {
+        val stream = keyword.continuation { value =>
+          new Stream.Cons(ExitScopeMarker, handler(value))
+        }
+
+        val buffer = new ArrayBuffer[AutoCloseable]
+        @tailrec
+        def closeUntilMarker(stream: Stream[AutoCloseable]): Stream[AutoCloseable] = {
+          stream.head match {
+            case ExitScopeMarker =>
+              stream.tail
+            case head =>
+              buffer += head
+              closeUntilMarker(stream.tail)
+          }
+        }
+        try {
+          closeUntilMarker(stream)
+        } finally {
+          var i = buffer.length - 1
+          var lastException: Throwable = null
+          while (i >= 0) {
+            try {
+              buffer(i).close()
+            } catch {
+              case NonFatal(e) =>
+                lastException = e
+            }
+            i -= 1
+          }
+          if (lastException != null) {
+            throw lastException
+          }
+        }
       }
     }
 
