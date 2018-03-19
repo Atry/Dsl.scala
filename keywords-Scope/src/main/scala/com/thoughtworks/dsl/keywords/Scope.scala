@@ -4,7 +4,7 @@ import com.thoughtworks.dsl.Dsl
 import com.thoughtworks.dsl.Dsl.{!!, Keyword}
 
 import scala.language.implicitConversions
-import scala.util.control.NonFatal
+import scala.util.control.{ControlThrowable, NonFatal}
 
 /**
   * @author 杨博 (Yang Bo)
@@ -69,5 +69,24 @@ object Scope extends LowPriorityScope0 {
 
       }
     }
+
+  trait TrampolineThrowable extends ControlThrowable {
+    def step(): Throwable
+  }
+
+  implicit def throwableScopeDsl2[Value]: Dsl[Scope[Throwable, Value], Throwable, Value] = {
+    new Dsl[Scope[Throwable, Value], Throwable, Value] {
+      def interpret(keyword: Scope[Throwable, Value], handler: Value => Throwable): Throwable = {
+        keyword.continuation { v: Value =>
+          new TrampolineThrowable {
+            def step(): Throwable = handler(v)
+          }
+        } match {
+          case tt: TrampolineThrowable => tt.step()
+          case e                       => throw new AssertionError(e)
+        }
+      }
+    }
+  }
 
 }
