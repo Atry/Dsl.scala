@@ -14,15 +14,15 @@ import scala.language.implicitConversions
   *          }}}
   *
   */
-final case class Yield[Element](element: Element) extends AnyVal with Keyword[Yield[Element], Element]
+final case class Yield[Narrow](element: Narrow) extends AnyVal with Keyword[Yield[Narrow], Narrow]
 
 object Yield {
 
-  implicit def implicitYield[Element](element: Element): Yield[Element] = Yield[Element](element)
+  implicit def implicitYield[Narrow](element: Narrow): Yield[Narrow] = Yield[Narrow](element)
 
-  implicit def yieldDsl[Element]: Dsl[Yield[Element], Stream[Element], Element] =
-    new Dsl[Yield[Element], Stream[Element], Element] {
-      def interpret(keyword: Yield[Element], mapper: Element => Stream[Element]): Stream[Element] = {
+  implicit def yieldDsl[Narrow, Element >: Narrow]: Dsl[Yield[Narrow], Stream[Element], Narrow] =
+    new Dsl[Yield[Narrow], Stream[Element], Narrow] {
+      def interpret(keyword: Yield[Narrow], mapper: Narrow => Stream[Element]): Stream[Element] = {
         new Stream.Cons(keyword.element, mapper(keyword.element))
       }
     }
