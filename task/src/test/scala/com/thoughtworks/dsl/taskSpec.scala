@@ -16,7 +16,7 @@ import scala.util.{Failure, Success}
   */
 final class taskSpec extends AsyncFreeSpec with Matchers {
 
-  "tailRecurision" in {
+  "tailRecurision" in Task.toFuture(Task.apply {
     @inline def loop(i: Int = 0, accumulator: Int = 0): task.Task[Int] = _ {
       if (i < 1000) {
         !loop(i + 1, accumulator + i)
@@ -25,9 +25,9 @@ final class taskSpec extends AsyncFreeSpec with Matchers {
       }
     }
 
-    val result = Task.blockingAwait(loop())
+    val result = !loop()
     result should be(499500)
-  }
+  })
 
   "taskToFuture" in Task.toFuture(Task.apply {
     succeed
