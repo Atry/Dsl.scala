@@ -53,7 +53,6 @@ private[dsl] sealed trait LowPriorityComprehension0 {
   *          {{{
   *          cartesianProduct.to[List] should be(List(1, 10, 100, 1000, 2, 20, 200, 2000, 3, 30, 300, 3000))
   *          }}}
-  *
   * @example This example implements the same feature as the example on Scaladoc of [[keywords.Yield]],
   *          except this example use `for`-comprehension instead of !-notation.
   *
@@ -115,7 +114,41 @@ private[dsl] sealed trait LowPriorityComprehension0 {
   *          }
   *          gccFlagBuilder3("main.c", "lib1/include", "lib2/include").to[Stream] should be(Stream("gcc", "-c", "main.c", "-I", "lib1/include", "-I", "lib2/include"))
   *          }}}
+  * @example Concatenate data downloaded multiple URLs.
   *
+  *          {{{
+  *          import com.thoughtworks.dsl.keywords._
+  *          import com.thoughtworks.dsl.keywords.Shift._
+  *          import com.thoughtworks.dsl.keywords.FlatMap._
+  *          import com.thoughtworks.dsl.domains.task.Task
+  *          import java.net.URL
+//  *          def concatenateRemoteData(urls: List[URL], downloader: URL => Task[Vector[Byte]]): Task[Vector[Byte]] = {
+//  *            val url = !Each(urls)
+//  *            val data = !downloader(url)
+//  *            val byte = !Each(data)
+//  *            !Return(byte)
+//  *          }
+  *          def concatenateRemoteData(urls: List[URL], downloader: URL => Task[Vector[Byte]]): Task[Vector[Byte]] = {
+  *            for {
+  *              url <- Each(urls)
+  *              data <- downloader(url)
+  *              byte <- Each(data)
+  *            } yield byte
+  *          }.as[Task[Vector[Byte]]]
+  *          }}}
+  *
+  *          {{{
+  *          def mockDownloader(url: URL) = Task {
+  *            "mock data\n".getBytes.toVector
+  *          }
+  *
+  *          val mockUrls = List(new URL("http://example.com/file1"), new URL("http://example.com/file2"))
+  *
+  *          def assertion: Task[org.scalatest.Assertion] = Task {
+  *            !concatenateRemoteData(mockUrls, mockDownloader) should be("mock data\nmock data\n".getBytes.toVector)
+  *          }
+  *          Task.toFuture(assertion)
+  *          }}}
   */
 object comprehension extends LowPriorityComprehension0 {
 
@@ -139,6 +172,12 @@ object comprehension extends LowPriorityComprehension0 {
 
     def to[Output[_]](implicit dsl: Dsl[Keyword, Output[Value], Value],
                       returnDsl: Dsl[Return[Value], Output[Value], Nothing]): Output[Value] = {
+      dsl.cpsApply(keyword, { value: Value =>
+        resetDomain(Return(value))
+      })
+    }
+    def as[Domain](implicit dsl: Dsl[Keyword, Domain, Value],
+                   returnDsl: Dsl[Return[Value], Domain, Nothing]): Domain = {
       dsl.cpsApply(keyword, { value: Value =>
         resetDomain(Return(value))
       })
