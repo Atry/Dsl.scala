@@ -383,3 +383,5 @@ parallelExecution in Global := {
   import Ordering.Implicits._
   VersionNumber(scalaVersion.value).numbers >= Seq(2L, 12L)
 }
+
+ThisBuild / Test / classLoaderLayeringStrategy := ClassLoaderLayeringStrategy.Flat
