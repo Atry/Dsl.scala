@@ -90,6 +90,7 @@ private[dsl] trait LowPriorityDsl0 extends LowPriorityDsl1 {
             handler(value)
           } catch {
             case NonFatal(e) =>
+              println(keyword)
               return continue(e)
           }
           // FIXME: Shift[Domain, Throwable]

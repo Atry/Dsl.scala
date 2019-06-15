@@ -10,8 +10,40 @@ import scala.concurrent.{ExecutionContext, Future}
 import scala.util.control.Exception.Catcher
 import scala.util.control.NonFatal
 
-/**
+/** A keyword for exception handling, which will be internally used in `try` / `catch` / `finally` expressions.
   * @author 杨博 (Yang Bo)
+  *
+  * @example xxxx s
+  *          {{{
+  *          import com.thoughtworks.dsl.Dsl.!!
+  *          import com.thoughtworks.dsl.keywords._
+  *          var i = 0
+  *
+  *          def f: Stream[String] !! Throwable = {
+  *            while (true) {
+  *              try {
+  *                !new Yield("x")
+  *                if (true) {
+  *                  throw new AssertionError("x")
+  *                }
+  *              } catch {
+  *                case e: AssertionError =>
+  *                  throw e
+  *              } finally {
+  *                i += 1
+  *              }
+  *            }
+  *            throw new AssertionError("Unreachable code")
+  *          }
+  *
+  *          val r = f { e =>
+  *            Stream.empty
+  *          }
+  *
+  *          r should have(length(1))
+  *          i should be(1)
+  *
+  *          }}}
   */
 final case class Catch[Domain, Value](block: Domain !! Value, catcher: Catcher[Domain !! Value])
     extends Keyword[Catch[Domain, Value], Value]
@@ -54,6 +86,7 @@ object Catch extends LowPriorityCatch0 {
   @implicitNotFound("Use Dsl[Catch[...], ...] as implicit parameters instead of CatchDsl[...]")
   private[dsl] trait CatchDsl[InnerDomain, OuterDomain, Value] extends DslCatch[InnerDomain, OuterDomain, Value] {
 
+    // FIXME: finalizer 应该放在 handler 上还是放在 catcher ？如果放在 handler ，无法处理异常。如果放在 catcher，那么就没必要用 Catcher，还不如直接用普通函数。
     def tryCatch(block: InnerDomain !! Value,
                  catcher: Catcher[InnerDomain !! Value],
                  handler: Value => OuterDomain): OuterDomain
@@ -203,4 +236,5 @@ object Catch extends LowPriorityCatch0 {
       )
     }
   }
+
 }

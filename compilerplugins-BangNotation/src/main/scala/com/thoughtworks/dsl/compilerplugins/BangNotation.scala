@@ -1,14 +1,12 @@
 package com.thoughtworks.dsl
 package compilerplugins
 
-import com.thoughtworks.dsl.Dsl.{ResetAnnotation, nonTypeConstraintReset, shift}
+import com.thoughtworks.dsl.Dsl.{ResetAnnotation, shift}
 import com.thoughtworks.dsl.compilerplugins.BangNotation.HasReturn
 
-import scala.annotation.tailrec
-import scala.tools.nsc.plugins.{Plugin, PluginComponent}
-import scala.tools.nsc.transform.Transform
+import scala.tools.nsc.plugins.Plugin
 import scala.tools.nsc.typechecker.ContextMode
-import scala.tools.nsc.{Global, Mode, Phase}
+import scala.tools.nsc.{Global, Mode}
 private object BangNotation {
   sealed trait HasReturn
   object HasReturn {
@@ -34,10 +32,30 @@ final class BangNotation(override val global: Global) extends Plugin {
   import global._
   import global.analyzer._
 
+  private type CpsAttachment = (Tree => Tree) => Tree
+  val name: String = "BangNotation"
+  val description: String =
+    "A compiler plugin that converts native imperative syntax to monadic expressions or continuation-passing style expressions"
+  val components = Nil
   private val hasScalaJsPlugin =
     global.settings.plugin.value.exists(_.matches("""^.*scalajs-compiler_.*\.jar$"""))
-
   private var active = true
+
+  override def init(options: List[String], error: String => Unit): Boolean = {
+    super.init(options, error) && {
+      try {
+        global.analyzer.addAnalyzerPlugin(new Deactable with TreeResetter with BangNotationTransformer)
+        true
+      } catch {
+        case e: ScalaReflectionException =>
+          error("""The BangNotation compiler plug-in requires the runtime library:
+  libraryDependencies += "com.thoughtworks.dsl" %% "dsl" % "latest.release"
+""")
+          false
+      }
+    }
+  }
+
   private def deactAnalyzerPlugins[A](run: => A): A = {
     synchronized {
       active = false
@@ -48,8 +66,6 @@ final class BangNotation(override val global: Global) extends Plugin {
       }
     }
   }
-
-  private type CpsAttachment = (Tree => Tree) => Tree
 
   private trait Deactable extends AnalyzerPlugin {
     override def isActive(): Boolean = {
@@ -63,26 +79,6 @@ final class BangNotation(override val global: Global) extends Plugin {
       super.canAdaptAnnotations(tree, typer, mode, pt) || {
         mode.inExprMode && tree.tpe.hasAnnotation(resetAnnotationSymbol) && tree.hasAttachment[CpsAttachment]
       }
-    }
-
-    /** Avoid [[UnApply]] in `tree` to suppress compiler crash due to `unexpected UnApply xxx`.
-      *
-      * @see https://github.com/scala/bug/issues/8825
-      */
-    private def scalaBug8825Workaround(tree: Tree): Tree = {
-      val transformer = new Transformer {
-        override def transform(tree: global.Tree): global.Tree = {
-          tree match {
-            case UnApply(
-                Apply(Select(prefix, termNames.unapply | termNames.unapplySeq), List(Ident(termNames.SELECTOR_DUMMY))),
-                args) =>
-              pq"$prefix(..${transformTrees(args)})"
-            case _ =>
-              super.transform(tree)
-          }
-        }
-      }
-      transformer.transform(tree)
     }
 
     override def adaptAnnotations(tree0: Tree, typer: Typer, mode: Mode, pt: Type): Tree = {
@@ -107,67 +103,41 @@ final class BangNotation(override val global: Global) extends Plugin {
 
     }
 
+    /** Avoid [[UnApply]] in `tree` to suppress compiler crash due to `unexpected UnApply xxx`.
+      *
+      * @see https://github.com/scala/bug/issues/8825
+      */
+    private def scalaBug8825Workaround(tree: Tree): Tree = {
+      val transformer = new Transformer {
+        override def transform(tree: global.Tree): global.Tree = {
+          tree match {
+            case UnApply(
+                Apply(Select(prefix, termNames.unapply | termNames.unapplySeq), List(Ident(termNames.SELECTOR_DUMMY))),
+                args) =>
+              pq"$prefix(..${transformTrees(args)})"
+            case _ =>
+              super.transform(tree)
+          }
+        }
+      }
+      transformer.transform(tree)
+    }
+
   }
 
   private trait BangNotationTransformer extends AnalyzerPlugin with AnnotationSymbols {
-
-    private def cpsAttachment(tree: Tree)(continue: Tree => Tree): Tree = {
-      tree.attachments.get[CpsAttachment] match {
-        case Some(attachment) => attachment(continue)
-        case None             => continue(tree)
-      }
-    }
-    private def cpsParameter(parameters: List[Tree])(continue: List[Tree] => Tree): Tree = {
-      parameters match {
-        case Nil =>
-          continue(Nil)
-        case head :: tail =>
-          cpsAttachment(head) { headValue =>
-            cpsParameter(tail) { tailValues =>
-              continue(headValue :: tailValues)
-            }
-          }
-      }
-    }
-    private def cpsParameterList(parameterLists: List[List[Tree]])(continue: List[List[Tree]] => Tree): Tree = {
-      parameterLists match {
-        case Nil =>
-          continue(Nil)
-        case headList :: tailList =>
-          cpsParameter(headList) { headValue =>
-            cpsParameterList(tailList) { tailValues =>
-              continue(headValue :: tailValues)
-            }
-          }
-      }
-    }
-
-    private def isCpsTree(tree: Tree) = {
-      def hasCpsAttachment(child: Any): Boolean = {
-        child match {
-          case list: List[_]                => list.exists(hasCpsAttachment)
-          case TypeApply(fun, args)         => hasCpsAttachment(fun)
-          case Apply(fun, args)             => hasCpsAttachment(fun) || args.exists(hasCpsAttachment)
-          case CaseDef(pat, guard, body)    => hasCpsAttachment(body)
-          case ValDef(mods, name, tpt, rhs) => hasCpsAttachment(rhs)
-          case childTree: Tree              => childTree.hasAttachment[CpsAttachment]
-          case _                            => false
-        }
-      }
-      tree.productIterator.exists(hasCpsAttachment)
-    }
 
     private lazy val catchIdent: Tree = {
       try {
         Ident(rootMirror.staticModule("_root_.com.thoughtworks.dsl.keywords.Catch"))
       } catch {
         case e: ScalaReflectionException =>
-          abort("""The BangNotation compiler plug-in requires the runtime library `keywords-catch` to enable !-notation in `try` / `catch` / `finally` expressions:
+          abort(
+            """The BangNotation compiler plug-in requires the runtime library `keywords-catch` to enable !-notation in `try` / `catch` / `finally` expressions:
   libraryDependencies += "com.thoughtworks.dsl" %% "keywords-catch" % "latest.release"
 """)
       }
     }
-
     private val whileName = currentUnit.freshTermName("while")
     private val whileDef = {
       val domainName = currentUnit.freshTypeName("Domain")
@@ -192,7 +162,6 @@ final class BangNotation(override val global: Global) extends Plugin {
       """
     }
     private val doWhileName = currentUnit.freshTermName("doWhile")
-
     private val doWhileDef = {
       val domainName = currentUnit.freshTypeName("Domain")
       val conditionName = currentUnit.freshTermName("condition")
@@ -214,51 +183,6 @@ final class BangNotation(override val global: Global) extends Plugin {
         }
       }
       """
-    }
-    private def notPure(head: Tree): List[Tree] = {
-      head match {
-        case (_: Ident) | (_: Literal) =>
-          Nil
-        case _ =>
-          head :: Nil
-      }
-    }
-
-    private def toFunction1(continue: Tree => Tree, parameterTypes: Type) = {
-      val parameterName = currentUnit.freshTermName("a")
-      val id = q"$parameterName"
-      continue(id) match {
-        case q"${f: Ident}.apply(${`id`})" =>
-          f
-        case transformed =>
-          q"""
-          { ($parameterName: $parameterTypes) =>
-            ${transformed}
-          }
-          """
-      }
-    }
-
-    private def hasReturnTree(tree: Tree): Boolean = {
-      tree.attachments.get[HasReturn] match {
-        case Some(HasReturn.Yes) =>
-          true
-        case Some(HasReturn.No) =>
-          false
-
-        case _ =>
-          tree match {
-            case _: Return =>
-              true
-            case valDef: ValDef =>
-              hasReturnTree(valDef.rhs)
-            case _: MemberDef =>
-              false
-            case _ =>
-              tree.children.exists(hasReturnTree)
-          }
-      }
-
     }
 
     override def pluginsTyped(tpe0: Type, typer: Typer, tree: Tree, mode: Mode, pt: Type): Type = {
@@ -391,6 +315,7 @@ final class BangNotation(override val global: Global) extends Plugin {
             EmptyTree
           case Try(block, catches, finalizer) =>
             val finalizerName = currentUnit.freshTermName("finalizer")
+            val unhandledName = currentUnit.freshTermName("unhandled")
             val resultName = currentUnit.freshTermName("result")
 
             q"""
@@ -401,7 +326,8 @@ final class BangNotation(override val global: Global) extends Plugin {
                   ${continue(q"$resultName")}
                 """
               }
-            }}}.apply(
+            }}}
+            .apply(
               { $finalizerName: ${TypeTree()} => ${cpsAttachment(block) { blockValue =>
               q"$finalizerName.apply($blockValue)"
             }}},
@@ -419,8 +345,17 @@ final class BangNotation(override val global: Global) extends Plugin {
                   }}}"""
                 )
               }
-            }}}
-            )
+            }}
+                case _root_.scala.util.control.NonFatal($unhandledName) =>
+                  { $finalizerName: ${TypeTree()} => ${{
+                    cpsAttachment(finalizer) { finalizerValue =>
+                      q"""
+                        ..${notPure(finalizerValue)}
+                        throw $unhandledName
+                      """
+                    }
+                  }}}
+              })
             """
           case Assign(lhs, rhs) =>
             cpsAttachment(rhs) { rhsValue =>
@@ -502,33 +437,105 @@ final class BangNotation(override val global: Global) extends Plugin {
       tpe
     }
 
+    private def cpsAttachment(tree: Tree)(continue: Tree => Tree): Tree = {
+      tree.attachments.get[CpsAttachment] match {
+        case Some(attachment) => attachment(continue)
+        case None             => continue(tree)
+      }
+    }
+
+    private def cpsParameter(parameters: List[Tree])(continue: List[Tree] => Tree): Tree = {
+      parameters match {
+        case Nil =>
+          continue(Nil)
+        case head :: tail =>
+          cpsAttachment(head) { headValue =>
+            cpsParameter(tail) { tailValues =>
+              continue(headValue :: tailValues)
+            }
+          }
+      }
+    }
+
+    private def cpsParameterList(parameterLists: List[List[Tree]])(continue: List[List[Tree]] => Tree): Tree = {
+      parameterLists match {
+        case Nil =>
+          continue(Nil)
+        case headList :: tailList =>
+          cpsParameter(headList) { headValue =>
+            cpsParameterList(tailList) { tailValues =>
+              continue(headValue :: tailValues)
+            }
+          }
+      }
+    }
+
+    private def isCpsTree(tree: Tree) = {
+      def hasCpsAttachment(child: Any): Boolean = {
+        child match {
+          case list: List[_]                => list.exists(hasCpsAttachment)
+          case TypeApply(fun, args)         => hasCpsAttachment(fun)
+          case Apply(fun, args)             => hasCpsAttachment(fun) || args.exists(hasCpsAttachment)
+          case CaseDef(pat, guard, body)    => hasCpsAttachment(body)
+          case ValDef(mods, name, tpt, rhs) => hasCpsAttachment(rhs)
+          case childTree: Tree              => childTree.hasAttachment[CpsAttachment]
+          case _                            => false
+        }
+      }
+      tree.productIterator.exists(hasCpsAttachment)
+    }
+
+    private def notPure(head: Tree): List[Tree] = {
+      head match {
+        case (_: Ident) | (_: Literal) =>
+          Nil
+        case _ =>
+          head :: Nil
+      }
+    }
+
+    private def toFunction1(continue: Tree => Tree, parameterTypes: Type) = {
+      val parameterName = currentUnit.freshTermName("a")
+      val id = q"$parameterName"
+      continue(id) match {
+        case q"${f: Ident}.apply(${`id`})" =>
+          f
+        case transformed =>
+          q"""
+          { ($parameterName: $parameterTypes) =>
+            ${transformed}
+          }
+          """
+      }
+    }
+
+    private def hasReturnTree(tree: Tree): Boolean = {
+      tree.attachments.get[HasReturn] match {
+        case Some(HasReturn.Yes) =>
+          true
+        case Some(HasReturn.No) =>
+          false
+
+        case _ =>
+          tree match {
+            case _: Return =>
+              true
+            case valDef: ValDef =>
+              hasReturnTree(valDef.rhs)
+            case _: MemberDef =>
+              false
+            case _ =>
+              tree.children.exists(hasReturnTree)
+          }
+      }
+
+    }
+
   }
 
   private trait AnnotationSymbols {
     private[BangNotation] lazy val resetAnnotationSymbol = symbolOf[ResetAnnotation]
     private[BangNotation] lazy val shiftSymbol = symbolOf[shift]
   }
-
-  val name: String = "BangNotation"
-
-  override def init(options: List[String], error: String => Unit): Boolean = {
-    super.init(options, error) && {
-      try {
-        global.analyzer.addAnalyzerPlugin(new Deactable with TreeResetter with BangNotationTransformer)
-        true
-      } catch {
-        case e: ScalaReflectionException =>
-          error("""The BangNotation compiler plug-in requires the runtime library:
-  libraryDependencies += "com.thoughtworks.dsl" %% "dsl" % "latest.release"
-""")
-          false
-      }
-    }
-  }
-
-  val description: String =
-    "A compiler plugin that converts native imperative syntax to monadic expressions or continuation-passing style expressions"
-
-  val components = Nil
 
 }
