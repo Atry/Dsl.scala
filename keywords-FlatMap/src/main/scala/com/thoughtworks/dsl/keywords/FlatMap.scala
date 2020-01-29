@@ -1,24 +1,32 @@
-package com.thoughtworks.dsl.keywords
-import com.thoughtworks.dsl.Dsl
+package com.thoughtworks.dsl
+package keywords
+import Dsl.IsKeyword
+import Dsl.Typed
 
-final case class FlatMap[UpstreamKeyword, UpstreamValue, NestedKeyword, NestedValue](
-    upstream: UpstreamKeyword,
-    flatMapper: UpstreamValue => NestedKeyword)
-    extends Dsl.Keyword[FlatMap[UpstreamKeyword, UpstreamValue, NestedKeyword, NestedValue], NestedValue]
+final case class FlatMap[Upstream, UpstreamValue, Mapped](
+  upstream: Upstream,
+  flatMapper: UpstreamValue => Mapped
+)
 
 object FlatMap {
-  implicit def flatMapDsl[UpstreamKeyword, UpstreamValue, Domain, NestedKeyword, NestedValue](
-      implicit
-      upstreamDsl: Dsl[UpstreamKeyword, Domain, UpstreamValue],
-      nestedDsl: Dsl[NestedKeyword, Domain, NestedValue]
-  ): Dsl[FlatMap[UpstreamKeyword, UpstreamValue, NestedKeyword, NestedValue], Domain, NestedValue] =
-    new Dsl[FlatMap[UpstreamKeyword, UpstreamValue, NestedKeyword, NestedValue], Domain, NestedValue] {
-      def cpsApply(keyword: FlatMap[UpstreamKeyword, UpstreamValue, NestedKeyword, NestedValue],
-                   handler: NestedValue => Domain) = {
-        val FlatMap(upstream, flatMapper) = keyword
-        upstreamDsl.cpsApply(upstream, { upstreamValue =>
-          nestedDsl.cpsApply(flatMapper(upstreamValue), handler)
-        })
-      }
+  given[Upstream, UpstreamValue, Mapped, MappedValue](given IsKeyword[Mapped, MappedValue]): IsKeyword[FlatMap[Upstream, UpstreamValue, Mapped], MappedValue]
+
+  given[
+    Upstream, UpstreamValue, Mapped, MappedValue,
+    Domain
+  ](
+    given
+    upstreamDsl: Dsl[Upstream, Domain, UpstreamValue],
+    mappedDsl: Dsl[Mapped, Domain, MappedValue],
+  ): Dsl[FlatMap[Upstream, UpstreamValue, Mapped], Domain, MappedValue] {
+    def cpsApply(
+      keyword: FlatMap[Upstream, UpstreamValue, Mapped],
+      handler: MappedValue => Domain
+    ): Domain = {
+      upstreamDsl.cpsApply(keyword.upstream, { a =>
+        val b = keyword.flatMapper(a)
+        mappedDsl.cpsApply(b, handler)
+      })
     }
+  }
 }

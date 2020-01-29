@@ -1,417 +1,388 @@
-package com.thoughtworks.dsl.keywords
-
+package com.thoughtworks.dsl
+package keywords
+import bangnotation._
 import com.thoughtworks.dsl.Dsl.!!
-import com.thoughtworks.enableMembersIf
-
 import scala.annotation.tailrec
 import scala.collection.{LinearSeq, SeqView}
 import scala.runtime.NonLocalReturnControl
-import org.scalatest.freespec.AnyFreeSpec
-import org.scalatest.Assertions
-import org.scalatest.matchers.should.Matchers
+import scala.language.implicitConversions
+import utest.{* => _, _}
 
 /**
   * @author 杨博 (Yang Bo)
   */
-class YieldSpec extends AnyFreeSpec with Matchers with Assertions {
+@deprecated("This test suite contains test cases for Stream, which is deprecated")
+object YieldSpec extends TestSuite {
 
-  {
-    !Yield(1)
+  val tests = Tests {
 
-    def nested(): Stream[Int] = {
-      !Yield(2)
-      Stream.empty[Int]
-    }
+    reset {
+      !Yield(1)
 
-    nested()
-  } // Should compile
-
-  "Given a continuation that uses Yield and Each expressions" - {
-
-    def asyncFunction: Stream[String] !! Unit = _ {
-      !Yield("Entering asyncFunction")
-      val subThreadId: Int = !Each(Seq(0, 1))
-      !Yield(s"Fork sub-thread $subThreadId")
-      !Yield("Leaving asyncFunction")
-    }
-
-    "When create a generator that contains Yield, Shift, and Each expressions" - {
-
-      def generator: Stream[String] = {
-        !Yield("Entering generator")
-        val threadId = !Each(Seq(0, 1))
-        !Yield(s"Fork thread $threadId")
-        !Shift(asyncFunction)
-        Stream("Leaving generator")
-      }
-
-      "Then the generator should contains yield values" in {
-        generator should be(
-          Seq(
-            /**/ "Entering generator",
-            /****/ "Fork thread 0",
-            /******/ "Entering asyncFunction",
-            /********/ "Fork sub-thread 0",
-            /**********/ "Leaving asyncFunction",
-            /**********/ "Leaving generator",
-            /********/ "Fork sub-thread 1",
-            /**********/ "Leaving asyncFunction",
-            /**********/ "Leaving generator",
-            /****/ "Fork thread 1",
-            /******/ "Entering asyncFunction",
-            /********/ "Fork sub-thread 0",
-            /**********/ "Leaving asyncFunction",
-            /**********/ "Leaving generator",
-            /********/ "Fork sub-thread 1",
-            /**********/ "Leaving asyncFunction",
-            /**********/ "Leaving generator"
-          ))
-      }
-
-    }
-
-  }
-
-  "stream" - {
-
-    def shouldCompile = {
-      !Yield("naked")
-      Stream.empty[String]
-    }
-
-    "local method" in {
-      def generator: Stream[Int] = {
-        def id[A](a: A) = a
-        id(!Yield(100))
+      def nested(): Stream[Int] = reset {
+        !Yield(2)
         Stream.empty[Int]
       }
-      generator should be(Stream(100))
-    }
 
-    "yield from" in {
-      def generator: Stream[Int] = {
-        def id[A](a: A) = a
-        id(!Yield(100, 200))
-        Stream.empty
+      nested()
+    } // Should compile
+
+    // "Given a continuation that uses Yield and Each expressions" - {
+
+    //   def asyncFunction: Stream[String] !! Unit = _ {
+    //     !Yield("Entering asyncFunction")
+    //     val subThreadId: Int = !Each(Seq(0, 1))
+    //     !Yield(s"Fork sub-thread $subThreadId")
+    //     !Yield("Leaving asyncFunction")
+    //   }
+
+    //   "When create a generator that contains Yield, Shift, and Each expressions" - {
+
+    //     def generator: Stream[String] = {
+    //       !Yield("Entering generator")
+    //       val threadId = !Each(Seq(0, 1))
+    //       !Yield(s"Fork thread $threadId")
+    //       !Shift(asyncFunction)
+    //       Stream("Leaving generator")
+    //     }
+
+    //     "Then the generator should contains yield values" - {
+    //       assert(generator ==
+    //         Seq(
+    //           /**/ "Entering generator",
+    //           /****/ "Fork thread 0",
+    //           /******/ "Entering asyncFunction",
+    //           /********/ "Fork sub-thread 0",
+    //           /**********/ "Leaving asyncFunction",
+    //           /**********/ "Leaving generator",
+    //           /********/ "Fork sub-thread 1",
+    //           /**********/ "Leaving asyncFunction",
+    //           /**********/ "Leaving generator",
+    //           /****/ "Fork thread 1",
+    //           /******/ "Entering asyncFunction",
+    //           /********/ "Fork sub-thread 0",
+    //           /**********/ "Leaving asyncFunction",
+    //           /**********/ "Leaving generator",
+    //           /********/ "Fork sub-thread 1",
+    //           /**********/ "Leaving asyncFunction",
+    //           /**********/ "Leaving generator"
+    //         ))
+    //     }
+
+    //   }
+
+    // }
+
+    "stream" - {
+
+      def shouldCompile = reset {
+        !Yield("naked")
+        Stream.empty[String]
       }
-      generator should be(Stream(100, 200))
-    }
 
-    "local function" in {
-      def generator: Stream[Int] = {
-        def id[A](a: A) = a
-        (id[Unit] _)(!Yield(100))
-        Stream.empty[Int]
-      }
-      generator should be(Stream(100))
-    }
-
-    "do/while" - {
-      "empty body" in {
-        def generator: Stream[Int] = {
-          do {} while ({
-            !Yield(100)
-            false
-          })
+      "local method" - {
+        def generator: Stream[Int] = reset {
+          def id[A](a: A) = a
+          id(!Yield(100))
           Stream.empty[Int]
         }
-        generator should be(Stream(100))
+        assert(generator == Stream(100))
       }
 
-      "false" in {
-        def generator: Stream[Int] = {
-          do {
-            !Yield(100)
-          } while (false)
-          Stream.empty[Int]
-        }
-        generator should be(Stream(100))
-      }
-
-      "with var" in {
-        def generator: Stream[Int] = {
-          var i = 5
-          do {
-            i -= {
-              !Yield(i)
-              1
-            }
-          } while ({
-            !Yield(-i)
-            i > 0
-          })
-          Stream.empty[Int]
-        }
-        generator should be(Stream(5, -4, 4, -3, 3, -2, 2, -1, 1, 0))
-      }
-    }
-
-    "while" - {
-      "false" in {
-        def whileFalse: Stream[Int] = {
-          while (false) {
-            !Yield(100)
-          }
-          Stream.empty[Int]
-        }
-
-        whileFalse should be(Stream.empty)
-      }
-    }
-
-    "match/case" in {
-
-      def loop(i: Int): Stream[Int] = {
-        i match {
-          case 100 =>
-            Stream.empty
-          case _ =>
-            !Yield(i)
-            loop(i + 1)
-        }
-      }
-
-      loop(90) should be(Stream(90, 91, 92, 93, 94, 95, 96, 97, 98, 99))
-
-    }
-
-    "recursive" in {
-      def loop(i: Int): Stream[Int] = {
-        if (i < 100) {
-          !Yield(i)
-          loop(i + 1)
-        } else {
+      "yield from" - {
+        def generator = reset[Stream[Int]] {
+          def id[A](a: A) = a
+          id(!Yield(100, 200))
           Stream.empty
         }
+        assert(generator == Stream(100, 200))
       }
 
-      loop(90) should be(Stream(90, 91, 92, 93, 94, 95, 96, 97, 98, 99))
-
-    }
-
-    "Given a generator that contains conditional Yield" - {
-      def generator = {
-        if (false) {
-          !Yield(0)
+      "local function" - {
+        def generator: Stream[Int] = reset {
+          def id[A](a: A) = a
+          (id[Unit] _)(!Yield(100))
+          Stream.empty[Int]
         }
-        if (true) {
-          !Yield(1)
+        assert(generator ==Stream(100))
+      }
+
+      "do/while" - {
+        "empty body" - {
+          def generator: Stream[Int] = reset {
+            while {
+              !Yield(100)
+              false
+            } do ()
+            Stream.empty[Int]
+          }
+          assert(generator ==Stream(100))
         }
-        if ({ !Yield(2); false }) {
-          !Yield(3)
-        } else {
-          !Yield(4)
+
+        "false" - {
+          def generator: Stream[Int] = reset {
+            while {
+              !Yield(100)
+              false
+            } do ()
+            Stream.empty[Int]
+          }
+          assert(generator ==Stream(100))
         }
-        Stream.empty[Int]
+
+        "with var" - {
+          def generator: Stream[Int] = reset {
+            var i = 5
+            while {
+              i -= {
+                !Yield(i)
+                1
+              }
+              !Yield(-i)
+              i > 0
+            } do()
+            Stream.empty[Int]
+          }
+          assert(generator ==Stream(5, -4, 4, -3, 3, -2, 2, -1, 1, 0))
+        }
       }
 
-      "Then the generator should contains values in selected branches" in {
-        generator should be(Seq(1, 2, 4))
+      "while" - {
+        "false" - {
+          def whileFalse: Stream[Int] = reset {
+            while (false) {
+              !Yield(100)
+            }
+            Stream.empty[Int]
+          }
+
+          assert(whileFalse == Stream.empty)
+        }
       }
 
-    }
+      "match/case" - {
 
-    "Given a continuation that uses Yield" - {
+        def loop(i: Int): Stream[Int] = reset {
+          i match {
+            case 100 =>
+              Stream.empty
+            case _ =>
+              !Yield(i)
+              loop(i + 1)
+          }
+        }
 
-      def yield4243: Stream[Int] !! Unit = _ {
-        !Yield(42)
-        !Yield(43)
+        assert(loop(90) == Stream(90, 91, 92, 93, 94, 95, 96, 97, 98, 99))
       }
 
-      "when create a generator that contains multiple Yield expression followed by a bang notation and a Stream.empty" - {
+      "recursive" - {
+        def loop(i: Int): Stream[Int] = reset {
+          if (i < 100) {
+            !Yield(i)
+            loop(i + 1)
+          } else {
+            Stream.empty
+          }
+        }
 
-        def generator: Stream[Int] = {
-          !Yield(0)
-          !Shift(yield4243)
-          !Yield(1)
+        assert(loop(90) == Stream(90, 91, 92, 93, 94, 95, 96, 97, 98, 99))
+
+      }
+
+      "Given a generator that contains conditional Yield" - {
+        def generator = reset {
+          if (false) {
+            !Yield(0)
+          }
+          if (true) {
+            !Yield(1)
+          }
+          if ({ !Yield(2); false }) {
+            !Yield(3)
+          } else {
+            !Yield(4)
+          }
           Stream.empty[Int]
         }
 
-        "Then the generator should contains yield values" in {
-          generator should be(Seq(0, 42, 43, 1))
+        "Then the generator should contains values in selected branches" - {
+          assert(generator == Seq(1, 2, 4))
         }
 
       }
 
-    }
+    //   "Given a continuation that uses Yield" - {
 
-    "apply" in {
-      def generator: Stream[Int] = {
-        val f = {
-          !Yield(1)
+    //     def yield4243: Stream[Int] !! Unit = _ {
+    //       !Yield(42)
+    //       !Yield(43)
+    //     }
 
-          { (x: Int) =>
-            -x
+    //     "when create a generator that contains multiple Yield expression followed by a bang notation and a Stream.empty" - {
+
+    //       def generator: Stream[Int] = {
+    //         !Yield(0)
+    //         !Shift(yield4243)
+    //         !Yield(1)
+    //         Stream.empty[Int]
+    //       }
+
+    //       "Then the generator should contains yield values" - {
+    //         assert(generator ==Seq(0, 42, 43, 1))
+    //       }
+
+    //     }
+
+    //   }
+
+      "apply" - {
+        def generator = reset[Stream[Int]] {
+          val f = {
+            !Yield(1)
+
+            { (x: Int) =>
+              -x
+            }
           }
+
+          val result = f({
+            !Yield(2)
+            42
+          })
+          Stream(result)
         }
-
-        val result = f({
-          !Yield(2)
-          42
-        })
-        Stream(result)
+        assert(generator == Stream(1, 2, -42))
       }
-      generator should be(Stream(1, 2, -42))
-    }
 
-    "return" in {
-      def generator: Stream[Int] = {
-        if (true) {
-          return {
-            !Yield(100)
-            Stream(42)
+      "return" - {
+        def returnGenerator: Stream[Int] = reset {
+          if (true) {
+            return {
+              !Yield(100)
+              Stream(42)
+            }
           }
+          Stream.empty[Int]
         }
-        Stream.empty[Int]
+        assert(returnGenerator == List(100, 42))
       }
-
-      a[NonLocalReturnControl[Stream[Int]]] should be thrownBy generator.last
-    }
-    "partial function" - {
-      "empty" in {
-        Seq.empty[Any].flatMap {
-          case i: Int =>
-            !Yield(100)
-            Stream(42)
-        } should be(empty)
-      }
-
-      "flatMap" in {
-        Seq(100, 200).flatMap {
-          case i: Int =>
-            !Yield(100)
-            Stream(42 + i)
-        } should be(Seq(100, 142, 100, 242))
-      }
-    }
-
-    "nested function call" - {
-      "call by value" in {
-        def nested() = {
-          "foo" +: !Yield("bar") +: Stream.empty[Any]
+      "partial function" - {
+        "empty" - {
+          assert(Seq.empty[Any].flatMap {
+            case i: Int =>
+              reset {
+                !Yield(100)
+                Stream(42)
+              }
+          } == Seq.empty)
         }
-        nested() should be(Stream("bar", "foo", ()))
-      }
-      "call by name" in {
-        def nested() = {
-          "foo" #:: !Yield("bar") #:: Stream.empty[Any]
+
+        "flatMap" - {
+          def flatMapReset = Seq(100, 200).flatMap {
+            case i: Int =>
+              reset {
+                !Yield(100)
+                Stream(42 + i)
+              }
+          }
+          assert(flatMapReset == Seq(100, 142, 100, 242))
         }
-        nested() should be(Stream("bar", "foo", ()))
       }
+
+      "nested function call" - {
+        "call by value" - {
+          def nested() = reset {
+            "foo" +: !Yield("bar") +: Stream.empty[Any]
+          }
+          assert(nested() == Stream("bar", "foo", ()))
+        }
+        "call by name" - {
+          def nested() = reset {
+            "foo" #:: !Yield("bar") #:: Stream.empty[Any]
+          }
+          assert(nested() == Stream("bar", "foo", ()))
+        }
+      }
+
     }
 
-  }
+    "view" - {
 
-  "view" - {
-
-    "indexed seq view" in {
-      def generator = {
+      def shouldCompile = reset {
         !Yield("naked")
         Vector.empty[String].view
       }
-      assert(generator.toList == List("naked"))
-    }
 
-    "yield from indexed seq view" in {
-      def generator = {
-        !Yield(100, 101)
-        Vector.empty[Int].view
+      "local method" - {
+        def generator = reset {
+          def id[A](a: A) = a
+          id(!Yield(100))
+          Seq.empty[Int].view
+        }
+        assert(generator.toList == List(100))
       }
-      assert(generator.toList == List(100, 101))
-    }
 
-    "yield from seq view" in {
-      def generator = {
-        !Yield(100, 101)
-        Seq.empty[Int].view
+      test("yield from") {
+        def generator = reset {
+          def id[A](a: A) = a
+          id(!Yield(100, 200))
+          Seq.empty[Int].view ++ Nil
+        }
+        assert(generator.toList == List(100, 200))
       }
-      assert(generator.toList == List(100, 101))
+
     }
 
-    "local method" in {
-      def generator = {
-        def id[A](a: A) = a
-        id(!Yield(100))
-        Seq.empty[Int].view
-      }
-      generator.toList should be(List(100))
-    }
+    // "iterator" - {
 
-    @enableMembersIf(scala.util.Properties.versionNumberString.startsWith("2.11."))
-    object Scala211 {
-      def ignoreInScala211(title: String)(f: => Any) = {
-        title ignore f
-      }
-    }
-    @enableMembersIf(!scala.util.Properties.versionNumberString.startsWith("2.11."))
-    object Scala212And213 {
-      def ignoreInScala211(title: String)(f: => Any) = {
-        title in f
-      }
-    }
-    import Scala212And213._
-    import Scala211._
+    //   def shouldCompile: Iterator[String] = {
+    //     !Yield("naked")
+    //     Iterator.empty
+    //   }
 
-    ignoreInScala211("yield from") {
-      def generator = {
-        def id[A](a: A) = a
-        id(!Yield(100, 200))
-        Seq.empty[Int].view ++ Nil
-      }
-      generator.toList should be(List(100, 200))
-    }
+    //   "local method" - {
+    //     def generator: Iterator[Int] = {
+    //       def id[A](a: A) = a
+    //       id(!Yield(100))
+    //       Iterator.empty
+    //     }
+    //      assert(generator.toList == List(100))
+    //   }
 
-  }
+    //   "yield from" - {
+    //     def generator: Iterator[Int] = {
+    //       def id[A](a: A) = a
+    //       id(!Yield(100, 200))
+    //       Iterator.empty
+    //     }
+    //      assert(generator.toList == List(100, 200))
+    //   }
+    // }
 
-  "iterator" - {
+    // "seq" - {
 
-    def shouldCompile: Iterator[String] = {
-      !Yield("naked")
-      Iterator.empty
-    }
+    //   def shouldCompile: LinearSeq[String] = {
+    //     !Yield("naked")
+    //     LinearSeq.empty[String]
+    //   }
 
-    "local method" in {
-      def generator: Iterator[Int] = {
-        def id[A](a: A) = a
-        id(!Yield(100))
-        Iterator.empty
-      }
-      generator.toList should be(List(100))
-    }
+    //   "local method" - {
+    //     def generator: LinearSeq[Int] = {
+    //       def id[A](a: A) = a
+    //       id(!Yield(100))
+    //       LinearSeq.empty
+    //     }
+    //     assert(generator ==LinearSeq(100))
+    //   }
 
-    "yield from" in {
-      def generator: Iterator[Int] = {
-        def id[A](a: A) = a
-        id(!Yield(100, 200))
-        Iterator.empty
-      }
-      generator.toList should be(List(100, 200))
-    }
-  }
-
-  "seq" - {
-
-    def shouldCompile: LinearSeq[String] = {
-      !Yield("naked")
-      LinearSeq.empty[String]
-    }
-
-    "local method" in {
-      def generator: LinearSeq[Int] = {
-        def id[A](a: A) = a
-        id(!Yield(100))
-        LinearSeq.empty
-      }
-      generator should be(LinearSeq(100))
-    }
-
-    "yield from" in {
-      def generator: LinearSeq[Int] = {
-        def id[A](a: A) = a
-        id(!Yield(100, 200))
-        LinearSeq.empty
-      }
-      generator should be(LinearSeq(100, 200))
-    }
+    //   "yield from" - {
+    //     def generator: LinearSeq[Int] = {
+    //       def id[A](a: A) = a
+    //       id(!Yield(100, 200))
+    //       LinearSeq.empty
+    //     }
+    //     assert(generator ==LinearSeq(100, 200))
+    //   }
+    // }
   }
 }

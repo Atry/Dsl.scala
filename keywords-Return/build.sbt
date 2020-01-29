@@ -1,3 +1,3 @@
-enablePlugins(Example)
+libraryDependencies += "com.lihaoyi" %%% "utest" % "0.7.3" % Test
 
-libraryDependencies += "org.scalatest" %%% "scalatest" % "3.1.0" % Test
+testFrameworks += new TestFramework("utest.runner.Framework")
