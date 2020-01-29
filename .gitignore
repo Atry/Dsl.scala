@@ -3,3 +3,8 @@ local.sbt
 secret/
 .metals/
 .bloop/
+
+# Dotty IDE
+.dotty-ide-artifact
+.dotty-ide.json
+_site

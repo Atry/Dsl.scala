@@ -1,9 +1,10 @@
-package com.thoughtworks.dsl.keywords
+package com.thoughtworks.dsl
+package keywords
+import Dsl.IsKeyword
+import Dsl.Lift
+import Dsl.Typed
 
-import com.thoughtworks.dsl.Dsl
-import com.thoughtworks.dsl.Dsl.Keyword
 
-import scala.language.implicitConversions
 
 /** A [[Dsl.Keyword]] to early return a lifted value from the enclosing function.
   *
@@ -55,14 +56,16 @@ import scala.language.implicitConversions
   *          }}}
   *
   */
-final case class Return[ReturnValue](returnValue: ReturnValue) extends AnyVal with Keyword[Return[ReturnValue], Nothing]
-
+opaque type Return[ReturnValue] = ReturnValue
 object Return {
+  @inline def cast[ReturnValue]: ReturnValue <:< Return[ReturnValue] = implicitly
 
-  implicit def returnDsl[ReturnValue, Domain >: ReturnValue]: Dsl[Return[ReturnValue], Domain, Nothing] =
-    new Dsl[Return[ReturnValue], Domain, Nothing] {
-      def cpsApply(keyword: Return[ReturnValue], handler: Nothing => Domain): Domain = {
-        keyword.returnValue
-      }
+  @inline def apply[ReturnValue]: ReturnValue =:= Return[ReturnValue] = summon[ReturnValue =:= Return[ReturnValue]]
+  given[ReturnValue]: IsKeyword[Return[ReturnValue], Nothing]
+
+  given[ReturnValue, Domain](given lift: Lift[ReturnValue, Domain]): Dsl[Return[ReturnValue], Domain, Nothing] {
+    def cpsApply(keyword: Return[ReturnValue], handler: Nothing => Domain): Domain = {
+      lift(keyword)
     }
+  }
 }
